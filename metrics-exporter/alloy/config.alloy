@@ -1,0 +1,54 @@
+logging {
+  level = "info"
+}
+
+pyroscope.write "pyro_write" {
+        endpoint {
+                url = sys.env("PYROSCOPE_SERVER_ADDRESS")
+        }
+}
+
+pyroscope.scrape "scrape_gaia" {
+
+        targets    = [{"__address__" = sys.env("COSMOS_NODE_ADDRESS"), "service_name" = "gaiad"}]
+        forward_to = [pyroscope.write.pyro_write.receiver]
+        
+        // Add validator and chain labels to all profiles
+        job_name = string.format("%s-%s", sys.env("CHAIN_ID"), sys.env("VALIDATOR_MONIKER"))
+        scrape_interval = sys.env("SCRAPE_INTERVAL")
+
+        profiling_config {
+                profile.process_cpu {
+                        enabled = true
+                }
+
+                profile.godeltaprof_memory {
+                        enabled = false
+                }
+
+                profile.memory {
+                        enabled = true
+                }
+
+                profile.godeltaprof_mutex {
+                        enabled = false
+                }
+
+                profile.mutex {
+                        enabled = true
+                }
+
+                profile.godeltaprof_block {
+                        enabled = false
+                }
+
+                profile.block {
+                        enabled = true
+                }
+
+                profile.goroutine {
+                        enabled = true
+                }
+        }
+        
+}

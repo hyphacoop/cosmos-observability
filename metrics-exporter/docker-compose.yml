@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # Grafana Alloy for continuous profiling
+  alloy:
+    image: grafana/alloy:latest
+    command: 
+      - "run"
+      - "/etc/alloy/config.alloy"
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy
+    environment:
+      - VALIDATOR_MONIKER=${VALIDATOR_MONIKER:-unknown}
+      - CHAIN_ID=${CHAIN_ID:-mainnet}
+      - PYROSCOPE_SERVER_ADDRESS=${PYROSCOPE_SERVER_ADDRESS:-http://localhost:4040}
+      - COSMOS_NODE_ADDRESS=${COSMOS_NODE_ADDRESS:-localhost:6060}
+      - SCRAPE_INTERVAL=${ALLOY_SCRAPE_INTERVAL:-15s}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    network_mode: host
+
+  # Node exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    command:
+      - '--path.rootfs=/host'
+      - '--web.listen-address=:9100'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)'
+      - '--collector.processes'
+      - '--collector.interrupts'
+      - '--collector.systemd'
+      - '--collector.tcpstat'
+    volumes:
+      - '/:/host:ro,rslave'
+      - '/sys:/host/sys:ro'
+      - '/proc:/host/proc:ro'
+    cap_add:
+      - SYS_TIME
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    restart: unless-stopped
+    pid: "host"
+    networks:
+      - o11y-network
+
+  # Prometheus to scrape and forward metrics
+  prometheus:
+    image: prom/prometheus:latest
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        # Generate Prometheus configuration
+        sed -e "s|{REMOTE_WRITE_URL}|$REMOTE_WRITE_URL|g" \
+            -e "s|{VALIDATOR_MONIKER}|$VALIDATOR_MONIKER|g" \
+            -e "s|{CHAIN_ID}|$CHAIN_ID|g" \
+            -e "s|{PROMETHEUS_PORT}|$PROMETHEUS_PORT|g" \
+            -e "s|{NODE_EXPORTER_HOST}|node-exporter|g" \
+            /etc/prometheus/prometheus.yml.template > /tmp/prometheus.yml
+
+        # Check if the generated config is valid
+        if [ ! -s /tmp/prometheus.yml ]; then
+          echo "ERROR: Generated Prometheus configuration is empty!"
+          exit 1
+        fi
+        
+        # Start Prometheus with the generated config
+        exec /bin/prometheus --config.file=/tmp/prometheus.yml --storage.tsdb.path=/prometheus --web.console.libraries=/usr/share/prometheus/console_libraries --web.console.templates=/usr/share/prometheus/consoles --web.enable-lifecycle --storage.tsdb.retention.time=2h
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.template
+      - prometheus_data:/prometheus
+    environment:
+      - REMOTE_WRITE_URL=${REMOTE_WRITE_URL:-http://example.com}
+      - VALIDATOR_MONIKER=${VALIDATOR_MONIKER:-unknown}
+      - CHAIN_ID=${CHAIN_ID:-mainnet}
+      - PROMETHEUS_PORT=${PROMETHEUS_PORT:-26660}
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - o11y-network
+
+networks:
+  o11y-network:
+    driver: bridge
+
+volumes:
+  prometheus_data:

@@ -1,0 +1,32 @@
+# Validator Information
+# Required: Unique identifier for your validator
+VALIDATOR_MONIKER=no-points
+# Required: Chain identifier
+CHAIN_ID=no-points-either
+
+# Profiling Configuration
+# Grafana Phlare/Pyroscope server to send profiling data
+PYROSCOPE_SERVER_ADDRESS=https://your-grafana-phlare-instance:4040
+# API key for authentication with Phlare/Pyroscope (if required)
+# PYROSCOPE_API_KEY=your-api-key-here
+# Port where your cosmos node exposes pprof endpoints
+PPROF_PORT=6060
+
+# Prometheus Configuration
+# URL for Prometheus remote write destination
+REMOTE_WRITE_URL=https://your-prometheus-server/api/v1/write
+# Optional: Authentication for remote write
+# REMOTE_WRITE_USERNAME=username
+# REMOTE_WRITE_PASSWORD=password
+# Port where your cosmos node exposes Prometheus metrics
+PROMETHEUS_PORT=26660
+
+# Optional Advanced Settings
+# How often to collect profiling data (in seconds)
+ALLOY_SCRAPE_INTERVAL=15s
+# Timeout for profile collection operations
+ALLOY_SCRAPE_TIMEOUT=10s
+# Local port for prometheus UI (change if port conflict)
+PROMETHEUS_UI_PORT=9091
+# Local port for node exporter (change if port conflict)
+NODE_EXPORTER_PORT=9100

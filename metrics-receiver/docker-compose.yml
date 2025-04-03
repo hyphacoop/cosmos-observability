@@ -98,11 +98,11 @@ services:
               path: /var/lib/grafana/dashboards
         ' > /provisioning/dashboards/default.yml
 
-        # Download Node Exporter dashboard
-        echo 'Downloading Node Exporter dashboard...'
-        curl -s https://grafana.com/api/dashboards/${NODE_EXPORTER_DASHBOARD_ID}/revisions/latest/download > /dashboards/dashboards/node-exporter-full.json
+        # Copy dashboards
 
-        # Copy custom dashboards
+        echo 'Copying Node Exporter dashboard...'
+        cp /custom-dashboards/node-exporter.json /dashboards/dashboards/node-exporter-dashboard.json
+
         echo 'Copying Cosmos dashboard...'
         cp /custom-dashboards/cosmos.json /dashboards/dashboards/cosmos-dashboard.json
 

@@ -1,0 +1,156 @@
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-remote-write-receiver'
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - monitoring
+
+  pyroscope:
+    image: grafana/pyroscope:latest
+    container_name: pyroscope
+    ports:
+      - "${PYROSCOPE_PORT:-4040}:4040"
+    volumes:
+      - pyroscope_data:/var/lib/pyroscope
+    command:
+      - 'server'
+    environment:
+      - PYROSCOPE_LOG_LEVEL=info
+      - PYROSCOPE_RETENTION=48h
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  grafana-init:
+    image: alpine:latest
+    container_name: grafana-init
+    volumes:
+      - grafana-provisioning:/provisioning
+      - init-complete:/init-complete
+      - grafana_data:/dashboards
+    environment:
+      - PROMETHEUS_HOST=prometheus
+      - PROMETHEUS_PORT=9090
+      - NODE_EXPORTER_DASHBOARD_ID=${NODE_EXPORTER_DASHBOARD_ID:-1860}
+      - PYROSCOPE_HOST=pyroscope
+      - PYROSCOPE_PORT=4040
+    command: >
+      sh -c "
+        rm -f /init-complete/ready
+        apk add --no-cache curl jq
+ 
+        # Create directories
+        mkdir -p /provisioning/datasources
+        mkdir -p /provisioning/dashboards
+        mkdir -p /provisioning/dashboard-files
+        
+        # Create datasource config
+        echo '
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            type: prometheus
+            access: proxy
+            orgId: 1
+            url: http://prometheus:9090
+            basicAuth: false
+            isDefault: true
+            editable: false
+          - name: Pyroscope
+            type: grafana-pyroscope-datasource
+            access: proxy
+            url: http://pyroscope:4040
+            editable: false
+        ' > /provisioning/datasources/datasources.yml
+        
+        # Create dashboard provider config
+        echo '
+        apiVersion: 1
+        providers:
+          - name: \"Default\"
+            orgId: 1
+            folder: \"\"
+            type: file
+            disableDeletion: false
+            updateIntervalSeconds: 10
+            allowUiUpdates: false
+            options:
+              path: /var/lib/grafana/dashboards
+        ' > /provisioning/dashboards/default.yml
+ 
+        # Download Node Exporter dashboard
+        mkdir -p /dashboards/dashboards
+        echo 'Downloading Node Exporter dashboard...'
+        curl -s https://grafana.com/api/dashboards/${NODE_EXPORTER_DASHBOARD_ID}/revisions/latest/download > /dashboards/dashboards/node-exporter-full.json
+ 
+        echo 'Grafana provisioning completed!'
+        
+        # Create a marker file to indicate initialization is complete
+        mkdir -p /init-complete
+        touch /init-complete/ready
+      "
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - grafana-provisioning:/etc/grafana/provisioning
+      - init-complete:/init-complete
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    entrypoint: >
+      sh -c "
+        sleep 2
+        # Wait for init container to complete
+        while [ ! -f /init-complete/ready ]; do
+          echo 'Waiting for grafana-init to complete...'
+          sleep 1
+        done
+        echo 'Grafana initialization complete, starting Grafana...'
+        
+        # Start Grafana with its regular entrypoint
+        /run.sh
+      "
+    restart: unless-stopped
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+      - pyroscope
+      - grafana-init
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  pyroscope_data:
+  grafana-provisioning:
+  init-complete:
+
+networks:
+  monitoring:
+    driver: bridge

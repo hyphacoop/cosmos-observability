@@ -45,6 +45,7 @@ services:
       - grafana-provisioning:/provisioning
       - init-complete:/init-complete
       - grafana_data:/dashboards
+      - ./grafana-graphs:/custom-dashboards
     environment:
       - PROMETHEUS_HOST=prometheus
       - PROMETHEUS_PORT=9090
@@ -55,12 +56,13 @@ services:
       sh -c "
         rm -f /init-complete/ready
         apk add --no-cache curl jq
- 
+
         # Create directories
         mkdir -p /provisioning/datasources
         mkdir -p /provisioning/dashboards
         mkdir -p /provisioning/dashboard-files
-        
+        mkdir -p /dashboards/dashboards
+
         # Create datasource config
         echo '
         apiVersion: 1
@@ -73,13 +75,14 @@ services:
             basicAuth: false
             isDefault: true
             editable: false
+            uid: eKzyRJ57k
           - name: Pyroscope
             type: grafana-pyroscope-datasource
             access: proxy
             url: http://pyroscope:4040
             editable: false
         ' > /provisioning/datasources/datasources.yml
-        
+
         # Create dashboard provider config
         echo '
         apiVersion: 1
@@ -94,14 +97,20 @@ services:
             options:
               path: /var/lib/grafana/dashboards
         ' > /provisioning/dashboards/default.yml
- 
+
         # Download Node Exporter dashboard
-        mkdir -p /dashboards/dashboards
         echo 'Downloading Node Exporter dashboard...'
         curl -s https://grafana.com/api/dashboards/${NODE_EXPORTER_DASHBOARD_ID}/revisions/latest/download > /dashboards/dashboards/node-exporter-full.json
- 
+
+        # Copy custom dashboards
+        echo 'Copying Cosmos dashboard...'
+        cp /custom-dashboards/cosmos.json /dashboards/dashboards/cosmos-dashboard.json
+
+        echo 'Copying Go metrics dashboard...'
+        cp /custom-dashboards/go-metrics.json /dashboards/dashboards/go-metrics-dashboard.json
+
         echo 'Grafana provisioning completed!'
-        
+
         # Create a marker file to indicate initialization is complete
         mkdir -p /init-complete
         touch /init-complete/ready

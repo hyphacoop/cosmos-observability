@@ -57,6 +57,7 @@ services:
             -e "s|{CHAIN_ID}|$CHAIN_ID|g" \
             -e "s|{PROMETHEUS_PORT}|$PROMETHEUS_PORT|g" \
             -e "s|{NODE_EXPORTER_HOST}|node-exporter|g" \
+            -e "s|{PROMETHEUS_UI_PORT}|${PROMETHEUS_UI_PORT:-9090}|g" \
             /etc/prometheus/prometheus.yml.template > /tmp/prometheus.yml
 
         # Check if the generated config is valid
@@ -75,6 +76,7 @@ services:
       - VALIDATOR_MONIKER=${VALIDATOR_MONIKER:-unknown}
       - CHAIN_ID=${CHAIN_ID:-mainnet}
       - PROMETHEUS_PORT=${PROMETHEUS_PORT:-26660}
+      - PROMETHEUS_UI_PORT=${PROMETHEUS_UI_PORT:-9090}
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

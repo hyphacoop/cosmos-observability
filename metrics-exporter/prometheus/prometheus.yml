@@ -5,6 +5,10 @@ global:
     moniker: "{VALIDATOR_MONIKER}"
     chain: "{CHAIN_ID}"
 
+
+web:
+  listen_address: "0.0.0.0:{PROMETHEUS_UI_PORT}"  # Set your desired IP and port here
+
 # Remote write configuration to send metrics to your central Prometheus
 remote_write:
   - url: "{REMOTE_WRITE_URL}"

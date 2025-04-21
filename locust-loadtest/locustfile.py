@@ -27,26 +27,27 @@ TEMP_DIR = None
 # Hardcoded faucet mnemonic
 FAUCET_MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
 
-INITIAL_AMOUNT = 10000000  # in uatom
-SEND_AMOUNT = 10  # in uatom
-MAIN_HOST = "http://perf-val1.stg.earthball.xyz:1317"
+# Chain configuration constants
+DENOM = "ulcst"
+INITIAL_AMOUNT = 10000000
+SEND_AMOUNT = 10
 HOSTS = [
-    "http://perf-val1.stg.earthball.xyz:1317",
-    "http://perf-val2.stg.earthball.xyz:1317",
-    # "http://perf-val3.stg.earthball.xyz:1317", This host intentionally kept idle
-    "http://perf-val4.stg.earthball.xyz:1317",
+    "https://rest.locust-sentry-1.ics-testnet.polypore.xyz",
+    "https://rest.locust-sentry-2.ics-testnet.polypore.xyz",
+    "https://rest.locust-sentry-3.ics-testnet.polypore.xyz",
+    "https://rest.locust-sentry-4.ics-testnet.polypore.xyz",
 ]
-GAS_PRICES = 0.001  # in uatom
-CHAIN_ID = "perf-testnet"
-
+MAIN_HOST = HOSTS[0]
+GAS_PRICES = 0.001
+CHAIN_ID = "test-locust-1"
 # Create a custom NetworkConfig
 def create_custom_network():
     network = NetworkConfig(
         chain_id=CHAIN_ID,
         url="rest+"+MAIN_HOST,
         fee_minimum_gas_price=GAS_PRICES,
-        fee_denomination="uatom",
-        staking_denomination="uatom",
+        fee_denomination=DENOM,
+        staking_denomination=DENOM,
     )
     return network
 
@@ -128,7 +129,7 @@ def fund_all_wallets(wallets):
     sequence = faucet_account.sequence
     
     # Process wallets in batches
-    msgs_per_tx = 100  # Number of send messages per transaction
+    msgs_per_tx = 200  # Number of send messages per transaction
     
     for i in range(0, len(wallets), msgs_per_tx):
         batch = wallets[i:i + msgs_per_tx]
@@ -154,8 +155,7 @@ def process_funding_batch(batch, sequence, account_number, max_retries=3):
         
         # Calculate gas and fee
         gas_limit = calculate_gas_for_batch(len(batch))
-        fee = f"{int(gas_limit * faucet_network.fee_minimum_gas_price)}uatom"
-        
+        fee = f"{int(gas_limit * faucet_network.fee_minimum_gas_price)}{DENOM}"        
         # Sign the transaction
         tx = sign_transaction(tx, sequence, account_number, gas_limit, fee)
         
@@ -191,7 +191,7 @@ def create_funding_transaction(batch):
             faucet_wallet.address(), 
             recipient_address,
             INITIAL_AMOUNT,
-            "uatom"
+            DENOM,
         )
         tx.add_message(msg)
     
@@ -403,9 +403,9 @@ class BankSendUser(locust.HttpUser):
         self.sequence = account.sequence
         
         # Store amount to send
-        self.amount = SEND_AMOUNT  # uatom
-        self.denom = "uatom"
-        
+        self.amount = SEND_AMOUNT
+        self.denom = DENOM
+
         self.msg = create_bank_send_msg(
                 self.address,
                 self.to_address,
@@ -432,8 +432,7 @@ class BankSendUser(locust.HttpUser):
         
         # Calculate gas and fee offline
         gas_limit = 4000000  # Use a safe default
-        fee = f"{int(gas_limit * self.network.fee_minimum_gas_price)}{self.denom}"
-        
+        fee = f"{int(gas_limit * self.network.fee_minimum_gas_price)}{DENOM}"
         # Seal and sign transaction offline
         tx.seal(
             SigningCfg.direct(self.wallet.public_key(), self.sequence),

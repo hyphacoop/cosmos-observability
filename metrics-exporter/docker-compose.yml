@@ -58,7 +58,6 @@ services:
             -e "s|{CHAIN_ID}|$CHAIN_ID|g" \
             -e "s|{PROMETHEUS_PORT}|$PROMETHEUS_PORT|g" \
             -e "s|{NODE_EXPORTER_HOST}|node-exporter|g" \
-            -e "s|{PROMETHEUS_UI_PORT}|${PROMETHEUS_UI_PORT:-9090}|g" \
             /etc/prometheus/prometheus.yml.template > /tmp/prometheus.yml
 
         # Check if the generated config is valid
@@ -68,7 +67,7 @@ services:
         fi
         
         # Start Prometheus with the generated config
-        exec /bin/prometheus --config.file=/tmp/prometheus.yml --storage.tsdb.path=/prometheus --web.console.libraries=/usr/share/prometheus/console_libraries --web.console.templates=/usr/share/prometheus/consoles --web.enable-lifecycle --storage.tsdb.retention.time=2h
+        exec /bin/prometheus --config.file=/tmp/prometheus.yml --storage.tsdb.path=/prometheus --web.console.libraries=/usr/share/prometheus/console_libraries --web.console.templates=/usr/share/prometheus/consoles --web.enable-lifecycle --storage.tsdb.retention.time=2h --web.listen-address="0.0.0.0:${PROMETHEUS_UI_PORT}"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.template
       - prometheus_data:/prometheus

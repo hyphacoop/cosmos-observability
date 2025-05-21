@@ -16,6 +16,7 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--web.enable-lifecycle'
       - '--web.enable-remote-write-receiver'
+      - '--storage.tsdb.retention.time=90d'
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

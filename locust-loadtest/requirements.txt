@@ -1,3 +1,4 @@
 locust
 sh
 cosmpy
+bech32

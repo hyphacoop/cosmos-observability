@@ -29,7 +29,7 @@ services:
     ports:
       - "${PYROSCOPE_PORT:-4040}:4040"
     volumes:
-      - pyroscope_data:/var/lib/pyroscope
+      - pyroscope_data:/data
     command:
       - 'server'
     environment:

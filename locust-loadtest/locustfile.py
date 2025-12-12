@@ -32,9 +32,18 @@ TEMP_DIR = None
 
 # Global gas tracking
 total_gas_used = 0
+total_fees_paid = 0  # in uatom
 total_gas_lock = threading.Lock()
 confirmed_tx_count = 0
 failed_tx_count = 0
+
+# Global pending tx queue (all users append here, drained at test_stop)
+global_pending_txs = deque()
+pending_txs_lock = threading.Lock()
+
+# Dynamic gas price from feemarket
+dynamic_gas_price = None
+gas_price_greenlet = None
 
 # Hardcoded faucet mnemonic
 FAUCET_MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
@@ -106,6 +115,30 @@ def query_tx_gas_used(txhash, http_client):
         return None
     except Exception:
         return None
+
+
+def query_feemarket_gas_price():
+    """Query current gas price from feemarket module. Raises on failure."""
+    import requests
+    response = requests.get(
+        f"{MAIN_HOST}/feemarket/v1/gas_price/{DENOM}",
+        timeout=5.0
+    )
+    response.raise_for_status()
+    data = response.json()
+    return float(data["price"]["amount"])
+
+
+def gas_price_refresher():
+    """Background greenlet that refreshes gas price every 3 seconds"""
+    global dynamic_gas_price
+    while True:
+        gsleep(3)
+        try:
+            dynamic_gas_price = query_feemarket_gas_price()
+        except Exception as e:
+            logging.error(f"Failed to refresh gas price: {e}")
+            # Keep using last known price, don't die mid-test
 
 
 class RawProtoMessage:
@@ -190,7 +223,7 @@ def on_locust_init(environment, **kwargs):
 # Create a temporary directory when the test starts
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
-    global TEMP_DIR, MSGS_PER_TX, MINT_AMOUNT, TX_INTERVAL
+    global TEMP_DIR, MSGS_PER_TX, MINT_AMOUNT, TX_INTERVAL, dynamic_gas_price, gas_price_greenlet
 
     # Apply custom arguments from web UI / command line
     if environment.parsed_options:
@@ -198,6 +231,11 @@ def on_test_start(environment, **kwargs):
         MINT_AMOUNT = environment.parsed_options.mint_amount
         TX_INTERVAL = environment.parsed_options.tx_interval
         print(f"Config: msgs_per_tx={MSGS_PER_TX}, mint_amount={MINT_AMOUNT}, tx_interval={TX_INTERVAL}s")
+
+    # Query feemarket for current gas price (dies if fails)
+    dynamic_gas_price = query_feemarket_gas_price()
+    gas_price_greenlet = spawn(gas_price_refresher)
+    print(f"Feemarket gas price: {dynamic_gas_price}")
 
     TEMP_DIR = tempfile.mkdtemp(prefix="locust_cosmos_")
     logging.info(f"Created temporary directory for test files: {TEMP_DIR}")
@@ -487,7 +525,12 @@ def on_worker_receive_wallets(environment, msg):
 # Clean up the temporary directory when the test ends
 @events.test_stop.add_listener
 def on_test_stop(environment, **kwargs):
-    global TEMP_DIR
+    global TEMP_DIR, gas_price_greenlet
+
+    # Stop gas price refresher
+    if gas_price_greenlet:
+        gas_price_greenlet.kill()
+
     if TEMP_DIR and os.path.exists(TEMP_DIR):
         for file in os.listdir(TEMP_DIR):
             try:
@@ -500,15 +543,37 @@ def on_test_stop(environment, **kwargs):
         except:
             logging.info(f"Failed to remove temporary directory: {TEMP_DIR}")
 
+    # Drain global pending txs queue
+    global total_gas_used, total_fees_paid, confirmed_tx_count, failed_tx_count
+    print(f"\nDraining {len(global_pending_txs)} pending txs...")
+    import requests
+    http_client = requests.Session()
+    while global_pending_txs:
+        with pending_txs_lock:
+            if not global_pending_txs:
+                break
+            txhash, fee_amount = global_pending_txs.popleft()
+        gas = query_tx_gas_used(txhash, http_client)
+        with total_gas_lock:
+            if gas is not None:
+                total_gas_used += gas
+                total_fees_paid += fee_amount
+                confirmed_tx_count += 1
+            else:
+                failed_tx_count += 1
+    print(f"Drain complete.")
+
     # Report gas stats
     print(f"\n{'='*50}")
     print(f"GAS USAGE STATS")
     print(f"{'='*50}")
     print(f"Total gas used: {total_gas_used:,}")
+    print(f"Total fees paid: {total_fees_paid:,} uatom ({total_fees_paid/1_000_000:.2f} ATOM)")
     print(f"Confirmed txs: {confirmed_tx_count}")
     print(f"Failed/missing txs: {failed_tx_count}")
     if confirmed_tx_count > 0:
         print(f"Avg gas per tx: {total_gas_used // confirmed_tx_count:,}")
+        print(f"Avg fee per tx: {total_fees_paid // confirmed_tx_count:,} uatom")
     print(f"{'='*50}\n")
 
 def get_account_info(client, address):
@@ -522,6 +587,7 @@ def get_account_info(client, address):
 
 # Disabled: renamed with underscore prefix to use TokenFactoryMintUser instead
 class _BankSendUser(locust.HttpUser):
+    abstract = True  # Disabled - using TokenFactoryMintUser instead
     host = MAIN_HOST
     wait_time = locust.constant_pacing(5) # One tx every how many seconds
 
@@ -681,11 +747,6 @@ class TokenFactoryMintUser(locust.HttpUser):
         self.denom = f"factory/{self.address}/{self.subdenom}"
         logging.info(f"User initialized with denom: {self.denom}")
 
-        # Initialize gas collection
-        self.pending_txs = deque()
-        self._stop_collector = False
-        self._gas_collector = spawn(self._collect_gas_stats)
-
     def _create_denom(self):
         """One-time denom creation during setup"""
         print(f"Creating denom: {self.subdenom} for {self.address}")
@@ -735,7 +796,7 @@ class TokenFactoryMintUser(locust.HttpUser):
         print(f"Denom creation tx submitted: {tx_hash}")
 
         # Wait for tx to be included in a block
-        time.sleep(10)
+        time.sleep(20)
 
         # Verify tx succeeded on-chain
         verify_response = http_client.get(
@@ -762,34 +823,6 @@ class TokenFactoryMintUser(locust.HttpUser):
                 return int(seq_match.group(1))
         return None
 
-    def _collect_gas_stats(self):
-        """Background greenlet to query tx results and collect gas stats"""
-        import requests
-        http_client = requests.Session()
-
-        while not self._stop_collector:
-            if self.pending_txs:
-                txhash = self.pending_txs.popleft()
-                gsleep(6)  # Wait for block inclusion
-
-                gas = query_tx_gas_used(txhash, http_client)
-
-                global total_gas_used, confirmed_tx_count, failed_tx_count
-                with total_gas_lock:
-                    if gas is not None:
-                        total_gas_used += gas
-                        confirmed_tx_count += 1
-                    else:
-                        failed_tx_count += 1
-            else:
-                gsleep(1)  # Idle when no pending txs
-
-    def on_stop(self):
-        """Stop the gas collector greenlet"""
-        self._stop_collector = True
-        if hasattr(self, '_gas_collector'):
-            self._gas_collector.kill()
-
     @locust.task
     def mint_batch(self):
         """Send batched mint-to transaction to random addresses"""
@@ -803,7 +836,9 @@ class TokenFactoryMintUser(locust.HttpUser):
 
         # Calculate gas (base + per-msg)
         gas_limit = 200000 + (MSGS_PER_TX * 60000)
-        fee = f"{int(gas_limit * self.network.fee_minimum_gas_price)}{DENOM}"
+        # Use dynamic feemarket price
+        fee_amount = int(gas_limit * dynamic_gas_price * 1.1)  # 10% buffer
+        fee = f"{fee_amount}{DENOM}"
 
         # Seal and sign transaction
         tx.seal(
@@ -836,10 +871,11 @@ class TokenFactoryMintUser(locust.HttpUser):
 
                 code = tx_response.get("code", -1)
                 if code == 0:
-                    # Success! Queue txhash for gas collection
+                    # Success! Queue txhash for gas collection (global queue)
                     txhash = tx_response.get("txhash")
                     if txhash:
-                        self.pending_txs.append(txhash)
+                        with pending_txs_lock:
+                            global_pending_txs.append((txhash, fee_amount))
                     self.sequence += 1
                     response.success()
                 else:
